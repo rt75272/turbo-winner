@@ -1,5 +1,5 @@
 """
-Entry point for Snake AI.
+Entry point for Snake vs AI Red Circle.
 
 Run with:
     uv run python main.py
@@ -11,7 +11,7 @@ from app import App
 
 
 def main() -> None:
-    """Launch the Snake AI training visualiser."""
+    """Launch the snake-vs-AI training visualiser."""
     App()
 
 

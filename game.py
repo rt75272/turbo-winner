@@ -1,33 +1,35 @@
 """
-Snake game core logic.
+Snake-vs-evader game core logic.
 
-Pure Python — no external packages or libraries required.
-The game board is a GRID_W x GRID_H grid.  The snake starts in the
-centre moving right.  One piece of food appears at a time; eating it
-grows the snake by one cell and increments the score.
+The human (or a simple chase bot) controls the snake. The neural network
+controls the red circle and learns to survive as long as possible without
+being caught.
 
 State representation
 --------------------
-The ``get_state()`` method returns an 11-element list used as the input
-vector for the neural network:
+The ``get_state()`` method returns a 12-element list used as the input
+vector for the neural network controlling the red circle:
 
-  [0] danger straight   – 1 if moving forward leads to a collision
-  [1] danger right      – 1 if turning right leads to a collision
-  [2] danger left       – 1 if turning left leads to a collision
-  [3] dir_up            – 1 if currently heading up
-  [4] dir_right         – 1 if currently heading right
-  [5] dir_down          – 1 if currently heading down
-  [6] dir_left          – 1 if currently heading left
-  [7] food_left         – 1 if food is to the left of the head
-  [8] food_right        – 1 if food is to the right of the head
-  [9] food_up           – 1 if food is above the head
- [10] food_down         – 1 if food is below the head
+    [0] danger_up         – 1 if moving up would hit a wall or the snake
+    [1] danger_right      – 1 if moving right would hit a wall or the snake
+    [2] danger_down       – 1 if moving down would hit a wall or the snake
+    [3] danger_left       – 1 if moving left would hit a wall or the snake
+    [4] snake_left        – 1 if the snake head is left of the red circle
+    [5] snake_right       – 1 if the snake head is right of the red circle
+    [6] snake_up          – 1 if the snake head is above the red circle
+    [7] snake_down        – 1 if the snake head is below the red circle
+    [8] snake_dir_up      – 1 if the snake is currently heading up
+    [9] snake_dir_right   – 1 if the snake is currently heading right
+ [10] snake_dir_down    – 1 if the snake is currently heading down
+ [11] snake_dir_left    – 1 if the snake is currently heading left
 
 Action encoding
 ---------------
-  0 – go straight
-  1 – turn right (clockwise)
-  2 – turn left  (counter-clockwise)
+    0 – stay in place
+    1 – move up
+    2 – move right
+    3 – move down
+    4 – move left
 """
 
 import random
@@ -49,14 +51,13 @@ DIR_LEFT = 3
 
 # (dx, dy) for each direction — y increases downward on screen
 DIR_VECS = [(0, -1), (1, 0), (0, 1), (-1, 0)]
+FOOD_VECS = [(0, 0), (0, -1), (1, 0), (0, 1), (-1, 0)]
 
 
 class SnakeGame:
-    """Single episode of the Snake game."""
+    """Single episode of snake chasing an AI-controlled red circle."""
 
-    # Maximum steps without eating before the episode is terminated
-    # (prevents infinite loops).
-    _STARVATION_LIMIT = GRID_W * GRID_H * 3
+    _EVASION_LIMIT = GRID_W * GRID_H * 4
 
     def __init__(self) -> None:
         self.reset()
@@ -68,21 +69,21 @@ class SnakeGame:
     def reset(self) -> None:
         """Reset all game state to the beginning of a new episode."""
         cx, cy = GRID_W // 2, GRID_H // 2
-        # Snake starts as a 3-cell horizontal line moving right
         self.body: list[tuple[int, int]] = [(cx, cy), (cx - 1, cy), (cx - 2, cy)]
         self.direction: int = DIR_RIGHT
         self.food: tuple[int, int] | None = self._place_food()
         self.score: int = 0
         self.steps: int = 0
-        self.steps_without_food: int = 0
         self.alive: bool = True
+        self.result: str = "running"
+        self._distance_accumulator: int = 0
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _place_food(self) -> tuple[int, int] | None:
-        """Place food on a random empty cell; returns None if the board is full."""
+        """Place the red circle on a random empty cell."""
         body_set = set(self.body)
         empty = [
             (x, y)
@@ -99,108 +100,129 @@ class SnakeGame:
         occupied = body_set if body_set is not None else set(self.body)
         return (x, y) in occupied
 
+    @staticmethod
+    def _manhattan(a: tuple[int, int], b: tuple[int, int]) -> int:
+        """Return the Manhattan distance between two grid cells."""
+        return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+    def _can_turn_to(self, direction: int) -> bool:
+        """Reject instant 180-degree turns while the snake has a body."""
+        if len(self.body) <= 1:
+            return True
+        return direction != (self.direction + 2) % 4
+
+    def set_snake_direction(self, direction: int) -> None:
+        """Update the snake heading if the requested turn is legal."""
+        if direction in (DIR_UP, DIR_RIGHT, DIR_DOWN, DIR_LEFT) and self._can_turn_to(direction):
+            self.direction = direction
+
+    def get_auto_snake_direction(self) -> int:
+        """Return a greedy snake direction that chases the red circle safely."""
+        if self.food is None:
+            return self.direction
+
+        hx, hy = self.body[0]
+        occupied = set(self.body[:-1]) if len(self.body) > 1 else set()
+        candidates: list[tuple[int, int]] = []
+        for direction, (dx, dy) in enumerate(DIR_VECS):
+            if not self._can_turn_to(direction):
+                continue
+            nx, ny = hx + dx, hy + dy
+            if self._is_collision(nx, ny, occupied):
+                continue
+            distance = self._manhattan((nx, ny), self.food)
+            candidates.append((distance, direction))
+
+        if not candidates:
+            return self.direction
+
+        candidates.sort(key=lambda item: item[0])
+        return candidates[0][1]
+
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
 
     def get_state(self) -> list[float]:
-        """
-        Return the 11-dimensional state vector for the neural network.
+        """Return the 12-dimensional state vector for the red-circle AI."""
+        if not self.alive:
+            return [0.0] * 12
 
-        All values are 0.0 or 1.0 (boolean indicators).
-        """
+        food_x, food_y = self.food if self.food is not None else self.body[0]
         hx, hy = self.body[0]
-        d = self.direction
+        body_set = set(self.body)
 
-        straight_dx, straight_dy = DIR_VECS[d]
-        right_dx, right_dy = DIR_VECS[(d + 1) % 4]
-        left_dx, left_dy = DIR_VECS[(d - 1) % 4]
+        danger = []
+        for dx, dy in DIR_VECS:
+            danger.append(float(self._is_collision(food_x + dx, food_y + dy, body_set)))
 
-        food_x, food_y = self.food if self.food is not None else (hx, hy)
-
-        body_set = set(self.body)   # compute once; reused for all three danger checks
-        return [
-            # --- Danger signals (relative to current heading) ---
-            float(self._is_collision(hx + straight_dx, hy + straight_dy, body_set)),
-            float(self._is_collision(hx + right_dx, hy + right_dy, body_set)),
-            float(self._is_collision(hx + left_dx, hy + left_dy, body_set)),
-            # --- Current heading (one-hot) ---
-            float(d == DIR_UP),
-            float(d == DIR_RIGHT),
-            float(d == DIR_DOWN),
-            float(d == DIR_LEFT),
-            # --- Food direction relative to head ---
-            float(food_x < hx),   # food is to the left
-            float(food_x > hx),   # food is to the right
-            float(food_y < hy),   # food is above  (y increases downward)
-            float(food_y > hy),   # food is below
+        return danger + [
+            float(hx < food_x),
+            float(hx > food_x),
+            float(hy < food_y),
+            float(hy > food_y),
+            float(self.direction == DIR_UP),
+            float(self.direction == DIR_RIGHT),
+            float(self.direction == DIR_DOWN),
+            float(self.direction == DIR_LEFT),
         ]
 
-    def step(self, action: int) -> tuple[float, bool]:
-        """
-        Advance the game by one step.
-
-        Args:
-            action: 0 = straight, 1 = turn right, 2 = turn left.
-
-        Returns:
-            (reward, done) tuple.
-        """
+    def step(self, food_action: int, snake_direction: int | None = None) -> tuple[float, bool]:
+        """Advance one chase step and return a reward/done pair for the evader."""
         if not self.alive:
             return 0.0, True
 
-        # --- Update heading ---
-        if action == 1:
-            self.direction = (self.direction + 1) % 4
-        elif action == 2:
-            self.direction = (self.direction - 1) % 4
+        if snake_direction is not None:
+            self.set_snake_direction(snake_direction)
+
+        if self.food is None:
+            self.alive = False
+            self.result = "escaped"
+            return 25.0, True
+
+        food_dx, food_dy = FOOD_VECS[food_action] if 0 <= food_action < len(FOOD_VECS) else (0, 0)
+        new_food = (self.food[0] + food_dx, self.food[1] + food_dy)
+        if self._is_collision(new_food[0], new_food[1]):
+            self.alive = False
+            self.result = "caught"
+            self.food = new_food
+            return -20.0, True
 
         dx, dy = DIR_VECS[self.direction]
         hx, hy = self.body[0]
         new_head = (hx + dx, hy + dy)
-
-        # --- Collision check (build body_set once for both wall and body test) ---
-        body_set = set(self.body)
-        if (
-            new_head[0] < 0
-            or new_head[0] >= GRID_W
-            or new_head[1] < 0
-            or new_head[1] >= GRID_H
-            or new_head in body_set
-        ):
+        occupied = set(self.body[:-1]) if len(self.body) > 1 else set()
+        if self._is_collision(new_head[0], new_head[1], occupied):
             self.alive = False
-            return -10.0, True
+            self.result = "snake_crashed"
+            self.food = new_food
+            return 25.0, True
 
-        # --- Move snake ---
+        self.food = new_food
         self.body.insert(0, new_head)
+        self.body.pop()
         self.steps += 1
-        self.steps_without_food += 1
+        self.score = self.steps
+        self._distance_accumulator += self._manhattan(new_head, self.food)
 
-        # --- Check food ---
         if new_head == self.food:
-            self.score += 1
-            self.steps_without_food = 0
-            self.food = self._place_food()
-            if self.food is None:
-                # Snake fills the entire board — perfect win
-                self.alive = False
-                return 100.0, True
-            return 10.0, False
-        else:
-            self.body.pop()  # remove tail (snake doesn't grow)
-
-        # --- Starvation timeout ---
-        if self.steps_without_food >= self._STARVATION_LIMIT:
             self.alive = False
-            return -1.0, True
+            self.result = "caught"
+            return -20.0, True
 
-        return 0.0, False
+        if self.steps >= self._EVASION_LIMIT:
+            self.alive = False
+            self.result = "escaped"
+            return 20.0, True
+
+        return 1.0 + self._manhattan(new_head, self.food) * 0.1, False
 
     def get_fitness(self) -> float:
-        """
-        Fitness score used by the genetic algorithm.
-
-        Grows quadratically with the number of food items eaten so that
-        eating more food is always strongly preferred over merely surviving.
-        """
-        return float(self.score * self.score * 500 + self.steps)
+        """Return the evader fitness used by the genetic algorithm."""
+        outcome_bonus = {
+            "caught": 0,
+            "snake_crashed": 300,
+            "escaped": 500,
+            "running": 0,
+        }
+        return float(self.steps * 25 + self._distance_accumulator + outcome_bonus.get(self.result, 0))

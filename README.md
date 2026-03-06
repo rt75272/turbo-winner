@@ -1,35 +1,35 @@
-# turbo-winner — Snake AI
+# turbo-winner — Snake vs AI Red Circle
 
-A graphical Snake game with animated visuals and an AI that **learns to
-master the game entirely from scratch** — no ML frameworks, no game
-engines, no external packages. Everything is built with the Python
-standard library only.
+A graphical Snake game with animated visuals where **you control the
+snake** and an AI-controlled red circle learns to evade you from
+scratch — no ML frameworks, no game engines, no external packages.
+Everything is built with the Python standard library only.
 
 ## What's inside
 
 | File | Description |
 |---|---|
-| `game.py` | Snake game logic — 20 × 20 grid, collision detection, state vector |
+| `game.py` | Snake-vs-evader logic — 20 × 20 grid, collision detection, AI state vector |
 | `neural_net.py` | Feedforward neural network (ReLU, Xavier init, pure Python) |
-| `trainer.py` | Genetic algorithm — tournament selection, uniform crossover, Gaussian mutation, elitism |
-| `app.py` | Tkinter visualisation — animated game canvas, stats panel, score chart |
+| `trainer.py` | Genetic algorithm — uniform crossover, Gaussian mutation, elitism |
+| `app.py` | Tkinter visualisation — manual snake controls, animated canvas, training stats |
 | `main.py` | Entry point |
 | `pyproject.toml` | `uv` project configuration (zero external dependencies) |
 
 ## How the AI works
 
-1. **Population** — 150 snakes, each controlled by a small neural
-   network (`11 → 32 → 16 → 3`).
-2. **Inputs (11)** — danger straight/right/left, current heading
-   (one-hot), food direction (left/right/up/down).
-3. **Outputs (3)** — go straight, turn right, turn left.
-4. **Fitness** — `score² × 500 + steps_survived` (strongly rewards
-   eating more food).
-5. **Evolution** — after every snake has died, the top 10 % are kept
-   unchanged (elitism), the rest are bred from the top 50 % via uniform
-   crossover and Gaussian mutation.
-6. **Learning** — each generation the population improves; within ~50
-   generations most snakes reliably find and eat food.
+1. **Population** — 150 red-circle agents, each controlled by a small
+   neural network (`12 → 32 → 16 → 5`).
+2. **Inputs (12)** — danger in each direction, relative snake-head
+   position, and the snake's current heading.
+3. **Outputs (5)** — stay, move up, move right, move down, move left.
+4. **Fitness** — survival time plus distance kept from the snake, with
+   bonuses when the snake crashes or the agent survives the full round.
+5. **Evolution** — after every agent has finished a round, the top 10 %
+   are kept unchanged and the rest are bred via uniform crossover and
+   Gaussian mutation.
+6. **Learning** — in watch mode you can steer the snake yourself; in
+   fast mode a chase bot takes over so the red circle can train quickly.
 
 ## Requirements
 
@@ -52,13 +52,14 @@ python main.py
 
 | Control | Description |
 |---|---|
+| **Arrow keys / WASD** | Steer the snake manually |
 | **Speed slider** | Adjust animation speed (right = faster) |
-| **⚡ Fast** | Toggle headless training mode — runs ~60× faster, no rendering |
+| **⚡ Fast** | Toggle fast training mode — a chase bot controls the snake and rendering is skipped |
 | **↺ Restart** | Reset all training and start from generation 1 |
 
 ## Screenshots / animation
 
 The dark canvas shows the snake (cyan head, blue body gradient) chasing
-pink pulsing food. The right-hand panel displays live statistics and a
-bar chart of the best score achieved each generation — you can watch the
-AI improve in real time.
+the pink pulsing red-circle agent. The right-hand panel displays live
+training statistics and a bar chart of the best survival time achieved
+each generation.

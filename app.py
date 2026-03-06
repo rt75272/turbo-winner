@@ -1,27 +1,21 @@
 """
-Snake AI — Tkinter visualisation and training loop.
+Snake vs AI red-circle visualisation and training loop.
 
-Only Python's standard library is used (tkinter, math, random, time).
-No external packages or libraries are required.
+The player steers the snake with arrow keys or WASD. The evolving neural
+network controls the red circle and learns to evade the snake.
 
 Controls
 --------
-Speed slider : adjusts animation delay (right = faster)
-⚡ Fast      : toggles headless fast-training mode (skips rendering)
-↺ Restart    : resets all training state and starts over
-
-The right-hand panel shows:
-  • Generation number
-  • Current agent index
-  • Live score / high score
-  • Best and average fitness this generation
-  • A history chart of the best score per generation
+Arrow keys / WASD : steer the snake
+Speed slider      : adjusts animation delay (right = faster)
+⚡ Fast            : toggles fast-training mode with bot-controlled snake
+↺ Restart         : resets all training state and starts over
 """
 
 import math
 import tkinter as tk
 
-from game import GRID_H, GRID_W, SnakeGame
+from game import DIR_DOWN, DIR_LEFT, DIR_RIGHT, DIR_UP, GRID_H, GRID_W, SnakeGame
 from neural_net import NeuralNetwork
 from trainer import GeneticAlgorithm
 
@@ -60,7 +54,7 @@ C_DEAD        = "#f72585"
 # ---------------------------------------------------------------------------
 # Training hyper-parameters
 # ---------------------------------------------------------------------------
-LAYER_SIZES     = [11, 32, 16, 3]   # 11 inputs → two hidden layers → 3 actions
+LAYER_SIZES     = [12, 32, 16, 5]   # 12 inputs → two hidden layers → 5 food actions
 POPULATION_SIZE = 150
 
 
@@ -72,13 +66,14 @@ class App:
 
     def __init__(self) -> None:
         self.root = tk.Tk()
-        self.root.title("Snake AI — Genetic Algorithm")
+        self.root.title("Snake vs AI Red Circle")
         self.root.configure(bg=C_BG)
         self.root.resizable(False, False)
 
         self._anim_tick: int = 0   # drives pulsing animations
 
         self._build_ui()
+        self._bind_inputs()
         self._init_training()
         self._schedule_next()
         self.root.mainloop()
@@ -139,7 +134,7 @@ class App:
         panel.pack_propagate(False)
 
         tk.Label(
-            panel, text="🐍  SNAKE  AI",
+            panel, text="🐍  SNAKE  VS  AI",
             bg=C_PANEL_BG, fg=C_ACCENT,
             font=("Courier", 15, "bold"),
         ).pack(pady=(0, 14))
@@ -149,11 +144,11 @@ class App:
         rows = [
             ("generation",  "Generation"),
             ("agent",       "Agent"),
-            ("score",       "Score"),
-            ("high_score",  "High Score"),
-            ("best_gen",    "Best (gen)"),
+            ("survival",    "Survival"),
+            ("high_score",  "Best Survival"),
+            ("best_gen",    "Best Fitness"),
             ("avg_fitness", "Avg Fitness"),
-            ("steps",       "Steps"),
+            ("mode",        "Snake Mode"),
             ("total_games", "Total Games"),
         ]
         for key, label in rows:
@@ -168,7 +163,7 @@ class App:
 
         # Chart
         tk.Label(
-            panel, text="\nBest Score per Generation",
+            panel, text="\nBest Survival per Generation",
             bg=C_PANEL_BG, fg=C_DIM, font=("Courier", 8),
         ).pack()
         self._chart = tk.Canvas(
@@ -182,9 +177,32 @@ class App:
         # Network info
         tk.Label(
             panel,
-            text=f"Network: {LAYER_SIZES}\nPopulation: {POPULATION_SIZE}",
+            text=(
+                f"Network: {LAYER_SIZES}\n"
+                f"Population: {POPULATION_SIZE}\n"
+                "Keys: arrows or WASD"
+            ),
             bg=C_PANEL_BG, fg=C_DIM, font=("Courier", 8),
         ).pack()
+
+    def _bind_inputs(self) -> None:
+        """Bind keyboard controls for manual snake steering."""
+        bindings = {
+            "<Up>": DIR_UP,
+            "<Right>": DIR_RIGHT,
+            "<Down>": DIR_DOWN,
+            "<Left>": DIR_LEFT,
+            "<w>": DIR_UP,
+            "<d>": DIR_RIGHT,
+            "<s>": DIR_DOWN,
+            "<a>": DIR_LEFT,
+            "<W>": DIR_UP,
+            "<D>": DIR_RIGHT,
+            "<S>": DIR_DOWN,
+            "<A>": DIR_LEFT,
+        }
+        for event_name, direction in bindings.items():
+            self.root.bind(event_name, lambda _event, d=direction: self._queue_turn(d))
 
     # ------------------------------------------------------------------
     # Training state
@@ -211,12 +229,20 @@ class App:
 
         self._game = SnakeGame()
         self._fast_mode: bool = False
+        self._pending_snake_direction: int | None = None
+        self._manual_control_ticks: int = 0
+        self._last_snake_mode: str = "BOT"
         self._score_history = []
         self._redraw_chart()
 
     def _restart(self) -> None:
         """Reset training completely and start over."""
         self._init_training()
+
+    def _queue_turn(self, direction: int) -> None:
+        """Queue a manual turn and keep player control active briefly."""
+        self._pending_snake_direction = direction
+        self._manual_control_ticks = 30
 
     # ------------------------------------------------------------------
     # Main loop scheduling
@@ -252,22 +278,45 @@ class App:
     # ------------------------------------------------------------------
 
     def _game_step(self) -> None:
-        """Execute one neural-network-driven game step."""
+        """Execute one game step with AI-controlled food and snake input."""
         if not self._game.alive:
             self._handle_game_over()
             return
 
         net = self._population[self._agent_idx]
         state = self._game.get_state()
+        snake_direction = self._resolve_snake_direction()
         action = net.get_action(state)
-        self._game.step(action)
+        self._game.step(action, snake_direction)
+
+    def _resolve_snake_direction(self) -> int:
+        """Return either player input or a chase-bot direction for the snake."""
+        if self._fast_mode:
+            self._last_snake_mode = "BOT"
+            self._pending_snake_direction = None
+            self._manual_control_ticks = 0
+            return self._game.get_auto_snake_direction()
+
+        if self._pending_snake_direction is not None:
+            direction = self._pending_snake_direction
+            self._pending_snake_direction = None
+            self._last_snake_mode = "YOU"
+            return direction
+
+        if self._manual_control_ticks > 0:
+            self._manual_control_ticks -= 1
+            self._last_snake_mode = "YOU"
+            return self._game.direction
+
+        self._last_snake_mode = "BOT"
+        return self._game.get_auto_snake_direction()
 
     def _handle_game_over(self) -> None:
         """Record fitness, advance to next agent, or evolve generation."""
         fitness = self._game.get_fitness()
         self._gen_fitnesses.append(fitness)
 
-        score = self._game.score
+        score = self._game.steps
         if score > self._high_score:
             self._high_score = score
         if score > self._gen_best_score:
@@ -362,8 +411,13 @@ class App:
         # --- Score overlay ---
         c.create_text(
             6, 5, anchor=tk.NW,
-            text=f"Score: {game.score}",
+            text=f"Survival: {game.steps}",
             fill=C_TEXT, font=("Courier", 11, "bold"),
+        )
+        c.create_text(
+            6, 22, anchor=tk.NW,
+            text=f"Snake: {self._last_snake_mode}",
+            fill=C_DIM, font=("Courier", 9),
         )
 
         # --- Game-over overlay ---
@@ -372,9 +426,14 @@ class App:
                 0, GAME_PX_H // 2 - 22, GAME_PX_W, GAME_PX_H // 2 + 22,
                 fill="#000000", stipple="gray50",
             )
+            overlay_text = {
+                "caught": "CAUGHT",
+                "snake_crashed": "SNAKE CRASHED",
+                "escaped": "EVADED",
+            }.get(game.result, "ROUND OVER")
             c.create_text(
                 GAME_PX_W // 2, GAME_PX_H // 2,
-                text="GAME OVER",
+                text=overlay_text,
                 fill=C_DEAD, font=("Courier", 20, "bold"),
             )
 
@@ -411,11 +470,11 @@ class App:
         s = self._stat
         s["generation"].config(text=str(self._generation))
         s["agent"].config(text=f"{self._agent_idx + 1} / {POPULATION_SIZE}")
-        s["score"].config(text=str(self._game.score))
+        s["survival"].config(text=str(self._game.steps))
         s["high_score"].config(text=str(self._high_score))
-        s["best_gen"].config(text=str(self._gen_best_score))
+        s["best_gen"].config(text=f"{max(self._gen_fitnesses, default=0):.0f}")
         s["avg_fitness"].config(text=f"{avg:.0f}")
-        s["steps"].config(text=str(self._game.steps))
+        s["mode"].config(text=self._last_snake_mode)
         s["total_games"].config(text=str(self._total_games))
 
     # ------------------------------------------------------------------

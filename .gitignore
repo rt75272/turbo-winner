@@ -1,0 +1,18 @@
+# Python / uv artefacts
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+.uv/
+dist/
+build/
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp

@@ -1,0 +1,16 @@
+[project]
+name = "turbo-winner"
+version = "0.1.0"
+description = "Snake game with an AI that learns to play — implemented entirely from scratch"
+readme = "README.md"
+requires-python = ">=3.9"
+# No external dependencies: game engine, neural network, and genetic algorithm
+# are all implemented from scratch using only the Python standard library.
+dependencies = []
+
+[project.scripts]
+snake-ai = "main:main"
+
+[tool.uv]
+# uv is used as the package manager / project tool.
+# Run the game with:  uv run python main.py
